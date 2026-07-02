@@ -1,0 +1,29 @@
+# ビルド生成物
+cgprog/game
+*.o
+*.out
+
+# 実行時に生成・更新されるファイル
+LiDAR/footpoint.txt
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# エディタ・一時ファイル
+*.tmp
+*~
+.vscode/
+
+# 機密（保険・現状は無し）
+.env
+.env.*
+*.pem
+*.key
+*secret*
+
+# 公開しない内部メモ（ローカル専用）
+task.md
+docs/教授報告_理解ノート.md
+docs/slide.md
+docs/slide.html
