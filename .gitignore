@@ -18,6 +18,7 @@ LiDAR/footpoint.txt
 # 機密（保険・現状は無し）
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *secret*
