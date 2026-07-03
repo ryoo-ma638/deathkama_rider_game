@@ -461,7 +461,7 @@ type VersionNote = {
  */
 const OLD_VERSION_NOTES: VersionNote[] = [
   {
-    file: "慎士班_デジコン/cgprog/main.cpp",
+    file: "授業版/cgprog/main.cpp",
     mtime: "2026-01-20 15:36",
     lines: 2333,
     description:
@@ -471,7 +471,7 @@ const OLD_VERSION_NOTES: VersionNote[] = [
     status: "latest_base",
   },
   {
-    file: "慎士班_デジコン/cgprog/main(2画面用).cpp",
+    file: "授業版/cgprog/main(2画面用).cpp",
     mtime: "2026-01-20 15:27",
     lines: 2362,
     description:
@@ -480,14 +480,14 @@ const OLD_VERSION_NOTES: VersionNote[] = [
     status: "reference_only",
   },
   {
-    file: "慎士班_デジコン/cgprog/mainのコピー.cpp",
+    file: "授業版/cgprog/mainのコピー.cpp",
     mtime: "2025-12-24 12:57",
     lines: 1893,
     description: "1画面版の複製＋実験。2画面化の前段階。",
     status: "archived",
   },
   {
-    file: "慎士班_デジコン/cgprog/main1画面.cpp",
+    file: "授業版/cgprog/main1画面.cpp",
     mtime: "2025-11-25 16:57",
     lines: 1831,
     description:
@@ -496,21 +496,21 @@ const OLD_VERSION_NOTES: VersionNote[] = [
     status: "reference_only",
   },
   {
-    file: "慎士班_デジコン/cgprog/main(土台).cpp",
+    file: "授業版/cgprog/main(土台).cpp",
     mtime: "2025-11-20 15:26",
     lines: 781,
     description: "土台（初期の骨組み）。",
     status: "archived",
   },
   {
-    file: "慎士班_デジコン/cgprog/main(初期lidar用).cpp",
+    file: "授業版/cgprog/main(初期lidar用).cpp",
     mtime: "2025-11-18 15:34",
     lines: 285,
     description: "最初期。LiDAR導入の試作。",
     status: "archived",
   },
   {
-    file: "慎士班_デジコン/cgprog/main（画像クラッシュ）.cpp",
+    file: "授業版/cgprog/main（画像クラッシュ）.cpp",
     mtime: "2025-11-18 14:55",
     lines: 890,
     description: "画像読み込みでクラッシュした版。",
