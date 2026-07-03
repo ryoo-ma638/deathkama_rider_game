@@ -51,7 +51,7 @@ type LiDARFrame = {
 
 /**
  * LiDARの起動確認チェックリスト（ゲーム起動前に実行）:
- * 1. lidarapp を起動
+ * 1. LiDARアプリを起動
  * 2. footpoint.txt が count > 0 になっていることを確認
  * 3. 足を動かして座標が変化することを確認
  */
