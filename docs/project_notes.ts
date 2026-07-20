@@ -9,7 +9,7 @@
 // センサーデータの型定義
 // =============================================================================
 
-/** M5StickC Plus2からシリアルで受け取る6軸データ */
+/** M5StickCからシリアルで受け取る6軸データ */
 type M5SensorData = {
   acc_x: number;  // val[0]: 左右傾き（G単位、-1.0〜1.0程度）
   acc_y: number;  // val[1]: 前後傾き（G単位）
@@ -22,11 +22,11 @@ type M5SensorData = {
 /**
  * 取り付け向きによる軸マッピングの注意
  *
- * M5StickC Plus2をLong辺が上（画面が正面）の場合:
+ * M5StickCをLong辺が上（画面が正面）の場合:
  *   縦振り = gyro_x（val[3]）が大きく変化する
  *   横振り = gyro_y（val[4]）が大きく変化する
  *
- * M5StickC Plus2を横向き（USB口が右）で固定した場合:
+ * M5StickCを横向き（USB口が右）で固定した場合:
  *   縦振り = gyro_y（val[4]）になる ← 逆転！
  *   横振り = gyro_x（val[3]）になる ← 逆転！
  *
@@ -307,7 +307,7 @@ const TASKS: Task[] = [
     detail:
       "arduino/m5stick_sender/m5stick_sender.ino を作成する。" +
       "送信フォーマット: acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z\\n（50Hz）。" +
-      "M5StickC Plus2の M5.Imu.getAccelData() / M5.Imu.getGyroData() を使用。",
+      "M5StickCの M5.Imu.getAccelData() / M5.Imu.getGyroData() を使用。",
     relatedBugs: ["BUG-004"],
   },
   {

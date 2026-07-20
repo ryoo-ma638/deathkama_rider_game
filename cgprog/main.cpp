@@ -1,5 +1,7 @@
-//g++ -O3 main.cpp -std=c++11 -framework OpenGL -framework GLUT -I/opt/homebrew/include -L/opt/homebrew/lib -lalut -framework OpenAL -Wno-deprecated
-
+// ビルド手順: cgprog/ に入って下記 g++、または ./run.sh を実行
+// cd cgprog
+// g++ -O3 main.cpp -std=c++11 -framework OpenGL -framework GLUT -I/opt/homebrew/include -L/opt/homebrew/lib -lalut -framework OpenAL -Wno-deprecated
+// ./run.sh    パソコン用   ./run.sh expo    test用(展示版) ./run.sh lidar  LiDARを先に起動してから展示用
 #include <iostream>
 #include <GLUT/glut.h>  //OpenGL
 #include <math.h>  //数学関数
@@ -18,7 +20,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-#define DEV_NAME "/dev/cu.M5STICKCP2-XXXXXX"  // ← 自分のM5Stickのポート名に変更（キーボードのみで遊ぶ場合は不要）
+// M5Stickのポート名は環境変数 M5STICK_PORT から取得（.env に記載・git管理外）。
+// 実ポート名は端末固有IDを含むためソースに直書きしない。キーボードのみで遊ぶなら未設定でOK。
 #define BAUD_RATE B115200
 #define BUFF_SIZE 4096
 
@@ -38,6 +41,11 @@ void initAL();
 void drawText(const char *string, float x, float y);
 void drawFloorScene();
 void drawWallScene();
+void drawPCScene();      // PC版(1画面統合)の描画振り分け
+void drawPCHud();        // PC版: プレイ中のHUD（時間/スコア/HP）
+void drawHudImage(GLuint tex, double xLeft, double yCenter, double w, double h); // HUD画像を1枚描く
+void drawPCPrompts();    // PC版: タイトル等の操作案内（PRESS SPACE など）
+void loadWallAssets();   // 壁用画像の読み込み（展示版=壁窓 / PC版=同一窓 で共用）
 GLuint loadTexture(const char* filename);
 void spawnEnemy(int type);
 void resetGame();
@@ -49,7 +57,15 @@ void drawRank(char grade, float cx, float cy, float size);     // ランク文�
 // --- グローバル変数 ---
 #define MAXNUM 1000  // LiDARの最大点数
 
-int winW, winH;  //ウィンドウサイズ
+int winW = 1100, winH = 700;  //ウィンドウサイズ（reshapeで更新）
+bool pcMode = false;  // true=PC版(1画面統合・キーボード)。引数なし起動でON、"expo"で従来の展示2窓
+bool bossHelpActive = false;  // PC版: ボス攻略説明を全画面表示してバトルを一時停止中
+bool bossHelpArmed  = true;   // スポットから離れたら再武装（次に踏むと再表示）
+int  alertTimer = 0;  // 登場アニメのカウントダウン（0で停止＝スペース待ち）
+int  alertType  = 0;  // 1=WAVE2「攻撃封印」 / 2=WAVE3「攻撃解放」＋ボス登場
+bool alertActive = false; // WAVE突入アラート表示中（スペースを押すまで継続・PC版のみ）
+int    bossShockTimer = 0;                  // ボス近接衝撃波の炎エフェクト残りフレーム
+double bossShockX = 0.0, bossShockY = 0.0;  // その発生位置（ボスの座標）
 double fr = 50.0;    // ★ 負荷対策で30に下げる
 double angle = 0.0;
 
@@ -111,6 +127,22 @@ GLuint texClearFloor;    // 床のゲームクリア映像（assets/clear_floor.
 GLuint texGameOverFloor; // 床のゲームオーバー映像（assets/gameover_floor.png）
 GLuint texNextStage;     // 「NEXT STAGE」の金色画像（床のクリア演出で使う・assets/next_stage.png）
 GLuint texHelpSpot;      // ボス戦ヘルプスポットの画像（床の右下に置く・assets/help_spot.png）
+GLuint texHelpSpotPlain; // WAVE1用の石のヘルプマーク（assets/help_spot_plain.png）
+GLuint texHelpSpotGold;  // WAVE2用の金コインのヘルプマーク（assets/help_spot_gold.png）
+GLuint texWave1Help;     // WAVE1の踏むヘルプ全画面（assets/wave1_help.png）
+GLuint texWave2Help;     // WAVE2の踏むヘルプ全画面（assets/wave2_help.png）
+GLuint texAlertSealed;   // 突入アラート「攻撃封印！」（assets/attack_sealed.png・無ければ英字）
+GLuint texAlertUnsealed; // 突入アラート「攻撃解放！」（assets/attack_unsealed.png・無ければ英字）
+bool   hasHelpPlain = false, hasHelpGold = false, hasAlertSealed = false, hasAlertUnsealed = false; // 画像が在るか
+double alertSealedAR = 3.0, alertUnsealedAR = 3.25;  // バナー画像の縦横比（読込時に実値へ更新）
+GLuint texWarning; bool hasWarning = false; double arWarning = 3.5;  // ボス登場のWARNING画像（無ければ英字）
+GLuint texPressStart; bool hasPressStart = false; double arPressStart = 5.31; // 開始案内バー（無ければ英字）
+GLuint texTitleFloor; bool hasTitleFloor = false; // 展示版の床タイトル（鎌の魔法陣・STATE_STARTの床のみ）
+GLuint texReturnBattle; bool hasReturnBattle = false; double arReturnBattle = 7.61; // ヘルプ「バトルにもどる」案内（無ければ英字）
+GLuint texSkipPrompt; bool hasSkipPrompt = false; double arSkipPrompt = 5.61; // ステージクリアの「スペースでスキップ」案内
+GLuint texWave2Notice, texNokori, texTai;  // WAVE2の日本語HUD（案内/のこり/たい）
+bool   hasWave2Notice = false, hasNokori = false, hasTai = false;
+double arNotice = 10.29, arNokori = 2.57, arTai = 1.33;  // それらの縦横比（読込時に実値へ更新）
 GLuint texNumFloor[10];  // 床コンテキスト用の金色数字（カウントダウン用。texNumは壁コンテキストなので床では使えないため別途読み込む）
 GLuint texWallWave1; // 1壁.jpg
 GLuint texWallWave2; // 2壁.jpg
@@ -132,6 +164,7 @@ GLuint texBossBeamF;  // ボスビーム発射 (se_boss_beam2.jpg)
 GLuint texBossExp;    // ボス爆発 (se_boss_exp.jpg)
 GLuint texBossExp2;    // ★追加: 投石画像2
 GLuint texBossExp3;    // ★追加: 投石画像3
+GLuint texBossShock;   // ボス近接衝撃波の炎（se_boss_shock.png）
 GLuint texBoss;           // ボス (Stage 3)
 GLuint texMob1, texMob2;  // モブ (Stage 1)
 GLuint texMob3, texMob4;  // モブ (Stage 2)
@@ -371,6 +404,29 @@ GLuint loadTexture(const char* filename) {
     return textureID;
 }
 
+// 画像ファイルが assets/ に在るか（未生成のバナーは英字表示にフォールバックするため）
+bool assetExists(const char* filename) {
+    char path[256];
+    snprintf(path, sizeof(path), "assets/%s", filename);
+    int w, h, c;
+    return stbi_info(path, &w, &h, &c) != 0;
+}
+
+// 画像の縦横比(w/h)を返す。無ければfallback（バナーを歪ませず表示するため）
+double assetAspect(const char* filename, double fallback) {
+    char path[256];
+    snprintf(path, sizeof(path), "assets/%s", filename);
+    int w, h, c;
+    if (stbi_info(path, &w, &h, &c) && h > 0) return (double)w / (double)h;
+    return fallback;
+}
+
+// 展示版(LiDAR)は体の動作で説明したいので _expo 版があれば優先。PC版・ファイルが無い時は基本画像。
+const char* helpVariant(const char* baseName, const char* expoName) {
+    if (!pcMode && assetExists(expoName)) return expoName;
+    return baseName;
+}
+
 
 // ▼▼▼ 敵スポーン関数 (完全版) ▼▼▼
 void spawnEnemy(int type) {
@@ -423,7 +479,7 @@ void spawnEnemy(int type) {
     } else { // 雑魚
         enemies[slot].x = spawnLocations[locIdx][0];
         enemies[slot].y = spawnLocations[locIdx][1];
-        enemies[slot].maxHp = (currentWave == 1) ? 30 : 80; 
+        enemies[slot].maxHp = (currentWave == 1) ? 30 : (pcMode ? 50 : 80); // PC版WAVE2は反射1発(50ダメージ)で倒せるよう50
         enemies[slot].hp = enemies[slot].maxHp;
         
         // ★ WAVEに応じてランダムにテクスチャを設定
@@ -441,6 +497,8 @@ void resetGame() {
     playerHP = 100;
     score = 0;
     currentWave = 1;
+    alertTimer = 0; alertType = 0; alertActive = false; // WAVE突入アラートの状態も初期化
+    bossHelpActive = false; bossHelpArmed = true;  // 踏むヘルプの状態も初期化
     enemiesKilledInWave2 = 0;
     enemiesKilledThisWave = 0;
     enemyRespawnTimer = 0;
@@ -475,6 +533,9 @@ void resetGame() {
 // オートエイム: 攻撃した瞬間、200以内で最も近い敵の方を自動で向く
 void triggerAttack(int type) {
     if (gameState != STATE_PLAY || !canAttack) return;
+    if (bossHelpActive) return;   // PC版: ボス攻略ヘルプ表示中は攻撃を止める
+    if (alertActive) return;      // PC版: WAVE突入アラート表示中は攻撃を止める
+    if (pcMode && currentWave == 2) return;  // PC版WAVE2: 縦横攻撃を封印し「反射のみ」で倒すステージにする
 
     if (type == 0) {
         swingDownEffectTimer = 10;
@@ -508,11 +569,18 @@ void triggerAttack(int type) {
 void initSerial()
 {
     struct termios tio;
-    
-    fd = open(DEV_NAME, O_RDWR | O_NONBLOCK );
+
+    // ポート名は環境変数 M5STICK_PORT（.env に記載・git管理外）から取得。
+    // 未設定 or 開けない時は、終了せずキーボード操作モードで起動を続行する。
+    const char* devName = getenv("M5STICK_PORT");
+    if (!devName || devName[0] == '\0') {
+        printf("M5STICK_PORT is not set (see .env.example).  -> Keyboard mode.\n");
+        useKeyboardMode = true;
+        return;
+    }
+    fd = open(devName, O_RDWR | O_NONBLOCK );
     if(fd<0) {
-        // M5Stickが見つからない場合は、終了せずキーボード操作モードで起動を続行する
-        printf("M5Stick not found (%s).  -> Keyboard mode.\n", DEV_NAME);
+        printf("M5Stick not found (%s).  -> Keyboard mode.\n", devName);
         useKeyboardMode = true;
         return;
     }
@@ -533,10 +601,47 @@ int main(int argc, char *argv[])
 
     srand(time(NULL)); // 乱数のシードを初期化
 
+    // 起動引数: なし=PC版(1画面・キーボード操作) / "expo"=展示用2ウィンドウ(床+壁)
+    pcMode = true;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "expo") == 0) pcMode = false;
+    }
+
     alutInit(&argc, argv);
     initAL();
-    initSerial();
+    if (!pcMode) initSerial();   // PC版はキーボード専用（M5Stickを探しに行かない）
     glutInit(&argc, argv);
+
+    // ==========================================
+    // PC版: 1ウィンドウに統合（床ゲーム全面＋壁UIを右上の小窓に）
+    // ==========================================
+    if (pcMode) {
+        fd = -1;  // シリアル未使用の印（誤ってstdinを読まないように）
+
+        glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH);
+        glutInitWindowSize(1100, 700);
+        windowID_floor = glutCreateWindow("Death Kama Rider");
+        windowID_wall  = windowID_floor;   // タイマー等の窓IDは同一窓を指す
+
+        glutDisplayFunc(display);
+        glutReshapeFunc(reshape);
+        glutKeyboardFunc(keyboard);
+        glutSpecialFunc(specialKeyDown);
+        glutSpecialUpFunc(specialKeyUp);
+        glutTimerFunc(1000/fr, timer, 0);
+
+        initGL();          // 床用の画像
+        loadWallAssets();  // 壁用の画像も同じウィンドウに読み込む
+
+        // 最初からキーボードで遊べる状態にする（'k'でM5切替も可）
+        useKeyboardMode = true;
+        footNum = 1; footPos[0][0] = 0.0; footPos[0][1] = 100.0;
+
+        glutTimerFunc(1000/fr, timer, 0); // 展示版と同じタイマー2系統（ゲーム速度を合わせるため）
+        glutMainLoop();
+        alutExit();
+        return 0;
+    }
 
     // ==========================================
     // 1. 床側 (メイン) ウィンドウ作成
@@ -567,44 +672,8 @@ int main(int argc, char *argv[])
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
 
-    // ★壁側の初期設定 (ここで壁用の画像を読み込みます)
-    glClearColor(0.0, 0.0, 0.0, 1.0);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_TEXTURE_2D);
-
-    
-
-    // ▼▼▼ 壁用画像の読み込み ▼▼▼
-    texWallWave1 = loadTexture("1壁.png");
-    texWallWave2 = loadTexture("2壁.png"); // ※拡張子がjpgか確認してください
-    texWallWave3 = loadTexture("3壁.png");
-
-    // リザルト用の金色数字・ランク画像を読み込む（壁ウィンドウで使う）
-    for (int i = 0; i < 10; i++) {
-        char p[64];
-        snprintf(p, sizeof(p), "font/num_%d.png", i);
-        texNum[i] = loadTexture(p);
-    }
-    const char* rk = "SABCD";
-    for (int i = 0; i < 5; i++) {
-        char p[64];
-        snprintf(p, sizeof(p), "font/rank_%c.png", rk[i]);
-        texRankImg[i] = loadTexture(p);
-    }
-
-    // ★重要: スタート・ルール・結果画面を「壁」に出すため、これらの画像もここで読み込み直すか、
-    // initGLでの読み込みをこちらに移動することを推奨します。
-    // (コンテキストが違うと表示されない場合があるため、念のためここで読み込みます)
-    texTitle = loadTexture("title.png");
-    texRule = loadTexture("rule.jpg");
-    texRule1 = loadTexture("rule1.png"); // ルール①遊び方（中世風）
-    texRule2 = loadTexture("rule2.png"); // ルール②ボス攻撃パターン（ボス戦のヘルプにも使う）
-    texClear = loadTexture("clear.png");
-    texGameOver = loadTexture("gameover.png");
-
-    
-    // ▲▲▲ ここまで ▲▲▲
+    // ★壁側の初期設定＋壁用画像の読み込み（PC版と共用の関数にまとめた）
+    loadWallAssets();
 
     // メインループ開始の直前に入れる
 glutTimerFunc(1000/fr, timer, 0); // ★これがないとタイマーが始動しません
@@ -622,18 +691,356 @@ glutMainLoop();
     return 0;
 }
 
+// 壁側の初期設定＋壁用画像の読み込み（展示版=壁ウィンドウ / PC版=統合ウィンドウ で共用）
+void loadWallAssets()
+{
+    glClearColor(0.0, 0.0, 0.0, 1.0);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_TEXTURE_2D);
+
+    // ▼▼▼ 壁用画像の読み込み ▼▼▼
+    texWallWave1 = loadTexture("1壁.png");
+    texWallWave2 = loadTexture("2壁.png");
+    texWallWave3 = loadTexture("3壁.png");
+
+    // リザルト用の金色数字・ランク画像
+    for (int i = 0; i < 10; i++) {
+        char p[64];
+        snprintf(p, sizeof(p), "font/num_%d.png", i);
+        texNum[i] = loadTexture(p);
+    }
+    const char* rk = "SABCD";
+    for (int i = 0; i < 5; i++) {
+        char p[64];
+        snprintf(p, sizeof(p), "font/rank_%c.png", rk[i]);
+        texRankImg[i] = loadTexture(p);
+    }
+
+    // スタート・ルール・結果画面（壁に出すためこのコンテキストでも読み込む）
+    texTitle = loadTexture(helpVariant("title.png", "title_expo.png"));  // PC=スペース版/展示=鎌を振る版
+    // texRule（旧ルール画面 rule.jpg）は未使用のため読み込み廃止（rule1/rule2 に統合済み）
+    texRule1 = loadTexture(helpVariant("rule1.png", "rule1_expo.png")); // 遊び方（PC=キー版/展示=動作名版）
+    texRule2 = loadTexture("rule2.png"); // ルール②ボス攻撃パターン（ボス戦のヘルプにも使う）
+    texClear = loadTexture(helpVariant("clear.png", "clear_expo.png"));        // PC=スペース版/展示=鎌を振る版
+    texGameOver = loadTexture(helpVariant("gameover.png", "gameover_expo.png")); // 同上
+}
+
 void display()
 {
+    if (pcMode) {           // PC版: 1画面に統合して描く
+        drawPCScene();
+        glutSwapBuffers();
+        return;
+    }
+
     int currentWindow = glutGetWindow();
-    
+
     if (currentWindow == windowID_floor) {
         // ★ここに必要なロジック全体を定義/呼び出しが必要です
-        drawFloorScene(); 
+        drawFloorScene();
     } else if (currentWindow == windowID_wall) {
-        drawWallScene(); 
+        drawWallScene();
     }
-    
+
     glutSwapBuffers();
+}
+
+// PC版(1画面統合)の描画:
+//   タイトル/ルール/リザルト = 壁の画面を全面に＋操作案内（PRESS SPACE など）
+//   プレイ中               = 床のゲームを全面に＋PC用HUD（時間/スコア/HP）を重ねる
+void drawPCScene()
+{
+    // ウィンドウをどう伸ばしても絵が歪まないよう、11:7の比率を保って中央に表示（余りは黒帯）
+    int vw = winW, vh = winH, vx = 0, vy = 0;
+    if (winW * 700 > winH * 1100) { vw = winH * 1100 / 700;  vx = (winW - vw) / 2; }
+    else                          { vh = winW * 700  / 1100; vy = (winH - vh) / 2; }
+    glViewport(vx, vy, vw, vh);
+
+    if (gameState != STATE_PLAY) {
+        drawWallScene();     // タイトル・ルール・リザルトは壁の画面をそのまま全面に
+        drawPCPrompts();     // 操作案内を重ねる
+        return;
+    }
+
+    drawFloorScene();        // ゲーム本編を全面に
+    drawPCHud();             // PC用HUDを重ねる
+
+    // ボス戦ヘルプ: スポットに乗ると全画面で攻略説明(rule2)を表示（この間バトルは停止）
+    if (bossHelpActive) {
+        glLoadIdentity();
+        glEnable(GL_TEXTURE_2D);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // 表示する画像はWAVEで切替（1=遊び方 / 2=反射の説明 / 3=ボス攻撃パターン）
+        GLuint helpTex = (currentWave == 1) ? texWave1Help
+                       : (currentWave == 2) ? texWave2Help
+                       : texRule2;
+        glBindTexture(GL_TEXTURE_2D, helpTex);
+        glColor4d(1.0, 1.0, 1.0, 1.0);
+        glBegin(GL_QUADS);
+            glTexCoord2f(0.0, 0.0); glVertex2d(-550.0, 700.0);
+            glTexCoord2f(0.0, 1.0); glVertex2d(-550.0, 0.0);
+            glTexCoord2f(1.0, 1.0); glVertex2d(550.0, 0.0);
+            glTexCoord2f(1.0, 0.0); glVertex2d(550.0, 700.0);
+        glEnd();
+        glDisable(GL_TEXTURE_2D);
+
+        // 下部に「スペースで戻る」案内（点滅・半透明バーの上）
+        glColor4d(0.0, 0.0, 0.0, 0.55);
+        glBegin(GL_QUADS);
+            glVertex2d(-550.0, 70.0); glVertex2d(550.0, 70.0);
+            glVertex2d(550.0, 0.0);   glVertex2d(-550.0, 0.0);
+        glEnd();
+        if ((gFrame / 25) % 2 == 0) {
+            if (hasReturnBattle) { double ph = 44.0; drawHudImage(texReturnBattle, -ph * arReturnBattle / 2.0, 33.0, ph * arReturnBattle, ph); }
+            else drawOutlinedText("PRESS SPACE TO RETURN TO BATTLE", 0.0, 22.0, 0.26, true);
+        }
+    }
+
+    // ▼ WAVE突入アラート（スペースを押すまで表示・押すとWAVE開始）: 1=攻撃封印 2=攻撃解放＋ボス登場
+    if (alertActive) {
+        glLoadIdentity();
+        glDisable(GL_TEXTURE_2D);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        double full = (alertType == 2) ? 3.0 * fr : 2.5 * fr;  // 総フレーム数
+        double p    = 1.0 - (double)alertTimer / full;         // 進行度 0→1
+
+        // 画面暗転（立ち上がりだけ・以降はキープ）
+        double dark = 0.62;
+        if (p < 0.15) dark *= p / 0.15;
+        glColor4d(0.0, 0.0, 0.0, dark);
+        glBegin(GL_QUADS);
+            glVertex2d(-550.0, 700.0); glVertex2d(550.0, 700.0);
+            glVertex2d(550.0, 0.0);    glVertex2d(-550.0, 0.0);
+        glEnd();
+
+        // 開幕フラッシュ（最初の一瞬。封印=赤 / 解放=金）
+        if (p < 0.12) {
+            double fa = (0.12 - p) / 0.12 * 0.85;
+            if (alertType == 2) glColor4d(1.0, 0.9, 0.5, fa);
+            else                glColor4d(0.85, 0.1, 0.15, fa);
+            glBegin(GL_QUADS);
+                glVertex2d(-550.0, 700.0); glVertex2d(550.0, 700.0);
+                glVertex2d(550.0, 0.0);    glVertex2d(-550.0, 0.0);
+            glEnd();
+        }
+
+        // ボス登場（type2）: 上下の黒帯＋ボスがズームイン＋振動＋WARNING
+        if (alertType == 2) {
+            double bp = (p < 0.2) ? p / 0.2 : 1.0;   // 立ち上がりだけ・以降キープ
+            if (bp < 0.0) bp = 0.0; if (bp > 1.0) bp = 1.0;
+            double bh = 90.0 * bp;
+            glDisable(GL_TEXTURE_2D);
+            glColor4d(0.0, 0.0, 0.0, 0.9);
+            glBegin(GL_QUADS);
+                glVertex2d(-550.0, 700.0);     glVertex2d(550.0, 700.0);
+                glVertex2d(550.0, 700.0 - bh); glVertex2d(-550.0, 700.0 - bh);
+                glVertex2d(-550.0, bh);         glVertex2d(550.0, bh);
+                glVertex2d(550.0, 0.0);         glVertex2d(-550.0, 0.0);
+            glEnd();
+
+            double zt = (p - 0.15) / 0.45;
+            if (zt < 0.0) zt = 0.0; if (zt > 1.0) zt = 1.0;
+            double sc = 0.25 + 0.75 * zt;                        // 0.25→1.0
+            double shake = (p < 0.65) ? sin((double)gFrame * 0.9) * 10.0 * (1.0 - zt) : 0.0;
+            double bwh = 320.0 * sc;
+            double cx = shake, cy = 440.0;
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, texBoss);
+            glColor4d(1.0, 1.0, 1.0, (zt < 0.3 ? zt / 0.3 : 1.0));
+            glBegin(GL_QUADS);
+                glTexCoord2f(0.0, 0.0); glVertex2d(cx - bwh, cy + bwh);
+                glTexCoord2f(0.0, 1.0); glVertex2d(cx - bwh, cy - bwh);
+                glTexCoord2f(1.0, 1.0); glVertex2d(cx + bwh, cy - bwh);
+                glTexCoord2f(1.0, 0.0); glVertex2d(cx + bwh, cy + bwh);
+            glEnd();
+            glDisable(GL_TEXTURE_2D);
+
+            if (p > 0.15 && (gFrame / 6) % 2 == 0) {
+                if (hasWarning) {
+                    double hh = 42.0, hw = hh * arWarning;   // 中央上・点滅（画像）
+                    glEnable(GL_TEXTURE_2D);
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    glBindTexture(GL_TEXTURE_2D, texWarning);
+                    glColor4d(1.0, 1.0, 1.0, 1.0);
+                    glBegin(GL_QUADS);
+                        glTexCoord2f(0.0, 0.0); glVertex2d(-hw, 655.0 + hh);
+                        glTexCoord2f(0.0, 1.0); glVertex2d(-hw, 655.0 - hh);
+                        glTexCoord2f(1.0, 1.0); glVertex2d( hw, 655.0 - hh);
+                        glTexCoord2f(1.0, 0.0); glVertex2d( hw, 655.0 + hh);
+                    glEnd();
+                    glDisable(GL_TEXTURE_2D);
+                } else {
+                    drawOutlinedText("WARNING", 0.0, 650.0, 0.5, true);   // 画像が無い間は英字
+                }
+            }
+        }
+
+        // 中央バナー（攻撃封印！/攻撃解放！）: スラムイン→キープ（消えない）
+        double bt = (p - 0.25) / 0.25;
+        if (bt < 0.0) bt = 0.0; if (bt > 1.0) bt = 1.0;
+        double bAlpha = bt;
+        double bScale = 1.25 - 0.25 * bt;                        // 1.25→1.0
+        double by = (alertType == 2) ? 160.0 : 350.0;
+
+        bool   useImg = (alertType == 2) ? hasAlertUnsealed : hasAlertSealed;
+        GLuint bTex   = (alertType == 2) ? texAlertUnsealed : texAlertSealed;
+        if (useImg) {
+            double ar = (alertType == 2) ? alertUnsealedAR : alertSealedAR;
+            double hh = 118.0 * bScale;
+            double hw = hh * ar;
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, bTex);
+            glColor4d(1.0, 1.0, 1.0, bAlpha);
+            glBegin(GL_QUADS);
+                glTexCoord2f(0.0, 0.0); glVertex2d(-hw, by + hh);
+                glTexCoord2f(0.0, 1.0); glVertex2d(-hw, by - hh);
+                glTexCoord2f(1.0, 1.0); glVertex2d( hw, by - hh);
+                glTexCoord2f(1.0, 0.0); glVertex2d( hw, by + hh);
+            glEnd();
+            glDisable(GL_TEXTURE_2D);
+        } else {
+            // まだ日本語バナー画像が無い間は英字で代用（画像を置けば自動で切替）
+            glDisable(GL_TEXTURE_2D);
+            glColor4d(0.0, 0.0, 0.0, bAlpha * 0.5);
+            glBegin(GL_QUADS);
+                glVertex2d(-540.0, by + 50.0); glVertex2d(540.0, by + 50.0);
+                glVertex2d(540.0, by - 45.0);  glVertex2d(-540.0, by - 45.0);
+            glEnd();
+            drawOutlinedText((alertType == 2) ? "SLASH UNSEALED!" : "SLASH SEALED!",
+                             0.0, by - 18.0, 0.38 * bScale, true);
+        }
+
+        // 「スペースで開始」案内（登場アニメがほぼ終わってから点滅・押すまで待機）
+        if (p > 0.8 && (gFrame / 20) % 2 == 0) {
+            if (hasPressStart) { double ph = 52.0; drawHudImage(texPressStart, -ph * arPressStart / 2.0, 48.0, ph * arPressStart, ph); }
+            else drawOutlinedText("PRESS SPACE TO START", 0.0, 45.0, 0.3, true);
+        }
+    }
+}
+
+// HUD用: 左端xLeft・中心yCenterに、幅w×高さhでテクスチャを1枚描く（日本語ラベル等）
+void drawHudImage(GLuint tex, double xLeft, double yCenter, double w, double h) {
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glColor4d(1.0, 1.0, 1.0, 1.0);
+    double y0 = yCenter - h / 2.0, y1 = yCenter + h / 2.0;
+    glBegin(GL_QUADS);
+        glTexCoord2f(0.0, 0.0); glVertex2d(xLeft,     y1);
+        glTexCoord2f(0.0, 1.0); glVertex2d(xLeft,     y0);
+        glTexCoord2f(1.0, 1.0); glVertex2d(xLeft + w, y0);
+        glTexCoord2f(1.0, 0.0); glVertex2d(xLeft + w, y1);
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+}
+
+// PC版: プレイ中のHUD。壁の大型UIの代わりに、ゲーム画面向けの控えめな配置で描く
+//   上部=半透明バーに 時間/目標・スコア・強化中 ／ 左下=コンパクトなHPバー
+void drawPCHud()
+{
+    if (waveClearTimer > 0 || alertActive) return;   // クリア演出中・突入アラート中は隠す
+
+    glLoadIdentity();
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_TEXTURE_2D);
+
+    // 上部の半透明バー（文字を読みやすくする下地）
+    glColor4d(0.0, 0.0, 0.0, 0.35);
+    glBegin(GL_QUADS);
+        glVertex2d(-550.0, 700.0); glVertex2d(550.0, 700.0);
+        glVertex2d(550.0, 645.0);  glVertex2d(-550.0, 645.0);
+    glEnd();
+
+    // 左上: 時間 / 反射の残り数 / ボス戦
+    if (currentWave == 2 && hasNokori && hasTai) {
+        // WAVE2は「のこり N たい」を日本語ラベル画像＋数字テクスチャで表示
+        int r = enemiesTargetWave2 - enemiesKilledInWave2;
+        if (r < 0) r = 0; if (r > 9) r = 9;
+        double y = 662.0, hgt = 30.0, x = -530.0;
+        drawHudImage(texNokori, x, y, hgt * arNokori, hgt);   x += hgt * arNokori + 14.0;
+        drawHudImage(texNumFloor[r], x, y, hgt * 0.72, hgt);  x += hgt * 0.72 + 14.0;
+        drawHudImage(texTai, x, y, hgt * arTai, hgt);
+    } else {
+        char info[64];
+        if (currentWave == 1) {
+            sprintf(info, "TIME: %d", gameTimer / (int)fr);
+        } else if (currentWave == 2) {
+            int r = enemiesTargetWave2 - enemiesKilledInWave2;
+            if (r < 0) r = 0;
+            sprintf(info, "REFLECT: %d", r);
+        } else {
+            sprintf(info, "BOSS BATTLE");
+        }
+        drawOutlinedText(info, -530.0, 660.0, 0.28, false);
+    }
+
+    // 右上: スコア（中央揃えで右寄せ気味に配置）
+    char sc[64];
+    sprintf(sc, "SCORE: %d", score);
+    drawOutlinedText(sc, 370.0, 660.0, 0.28, true);
+
+    // 中央上: WAVE2は「こうげきできない！ガードではねかえそう」を常時案内。それ以外はパワーアップ表示
+    if (currentWave == 2) {
+        if (hasWave2Notice) {
+            double nh = 30.0, nw = nh * arNotice;
+            drawHudImage(texWave2Notice, -nw / 2.0, 665.0, nw, nh);
+        } else {
+            drawOutlinedText("SLASH SEALED! GUARD TO REFLECT", 0.0, 663.0, 0.18, true);
+        }
+    } else if (attackBuffTimer > 0) {
+        drawOutlinedText("POWER UP!", 0.0, 660.0, 0.28, true);
+    }
+
+    // 左下: HPバー（コンパクト）
+    float bw = 320.0, bh = 22.0, bx = -530.0, by = 18.0;
+    glDisable(GL_TEXTURE_2D);
+    glColor4d(0.0, 0.0, 0.0, 0.45);
+    glBegin(GL_QUADS);
+        glVertex2d(bx - 6, by - 6);      glVertex2d(bx + bw + 6, by - 6);
+        glVertex2d(bx + bw + 6, by + bh + 6); glVertex2d(bx - 6, by + bh + 6);
+    glEnd();
+    float w = (float)playerHP / 100.0 * bw;
+    if (w < 0) w = 0;
+    if (w > bw) w = bw;
+    if (playerHP <= 30) glColor4d(1.0, 0.15, 0.15, 0.95);  // 残りわずかで赤
+    else                glColor4d(0.1, 0.95, 0.35, 0.95);
+    glBegin(GL_QUADS);
+        glVertex2d(bx, by);     glVertex2d(bx + w, by);
+        glVertex2d(bx + w, by + bh); glVertex2d(bx, by + bh);
+    glEnd();
+    char hp[32];
+    sprintf(hp, "HP %d", playerHP);
+    drawOutlinedText(hp, bx, by + bh + 12.0, 0.2, false);
+}
+
+// PC版: 画面下の操作案内（タイトル/ルール/リザルトで表示。gFrameで点滅）
+void drawPCPrompts()
+{
+    glLoadIdentity();
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    bool blink = ((gFrame / 25) % 2 == 0);
+
+    if (gameState == STATE_START) {
+        // タイトル画像に開始案内（鎌を振ってゲームスタート）が焼き込み済みのため、ここでは重ねない（衝突防止）
+    }
+    else if (gameState == STATE_RULE) {
+        // 開始案内のみ（画面下部に点滅）
+        if (blink) {
+            if (hasPressStart) { double ph = 60.0; drawHudImage(texPressStart, -ph * arPressStart / 2.0, 345.0, ph * arPressStart, ph); }
+            else drawOutlinedText("PRESS SPACE TO START", 0.0, 345.0, 0.4, true);
+        }
+    }
+    else if (gameState == STATE_RESULT) {
+        // クリア/ゲームオーバー画像に案内（鎌を振ってタイトルへ）が焼き込み済みのため、ここでは重ねない（衝突防止）
+    }
 }
 
 
@@ -646,8 +1053,9 @@ void display()
     if (gameState == STATE_START || gameState == STATE_RULE) {
         glEnable(GL_TEXTURE_2D);
         
-        // ★元に戻す：床は「ステージ1の背景(texBg[0])」を表示
-        glBindTexture(GL_TEXTURE_2D, texBg[0]); 
+        // タイトルは鎌の魔法陣(title_floor)、ルールはステージ1背景（※展示版の床投影のみ。PC版のタイトルはtitle.png）
+        if (gameState == STATE_START && hasTitleFloor) glBindTexture(GL_TEXTURE_2D, texTitleFloor);
+        else glBindTexture(GL_TEXTURE_2D, texBg[0]);
 
         glColor3d(1.0, 1.0, 1.0);
         glBegin(GL_QUADS);
@@ -737,16 +1145,22 @@ void display()
     // ▼▼▼ 【新機能】ボス戦ヘルプスポット（WAVE3のみ・床の右下に光るスポットを置く） ▼▼▼
     //   プレイヤーが踏むと充填ゲージがたまり、スポットが明るく光る（踏んだ手応え）。
     //   （壁には別途ボスの倒し方＝rule2 が大きく表示される：drawWallScene 側）
-    if (currentWave == 3 && waveClearTimer <= 0) {
+    // WAVE3=金マーク(両モード) / WAVE1・2=石マーク(PC版のみ)。踏むとそのWAVEの遊び方を全画面表示。
+    bool showSpot = (waveClearTimer <= 0) &&
+                    (currentWave == 3 || (pcMode && (currentWave == 1 || currentWave == 2)));
+    if (showSpot) {
         // 判定ゾーン＝床の「右下」。ボスは上中央(0,400)に居るので下の隅は安全。
         bool onSpot = (footNum > 0 && footPos[0][0] > 320.0 && footPos[0][1] < 180.0);
         float pulse = 0.5f + 0.5f * sinf(gFrame * 0.12f);   // ゆっくり明滅
         float sx = 445.0f, sy = 115.0f;                     // 床・右下の位置
-        float half = onSpot ? 120.0f : 100.0f;              // 踏むと少し大きくなる
+        float half = onSpot ? 70.0f : 55.0f;                // 踏むと少し大きくなる（大きすぎたので縮小）
 
-        // スポット本体（通常は淡い金色でゆっくり明滅、踏むと白く明るく光る）
+        // WAVE3=金の魔法陣 / WAVE2=金コイン / WAVE1=石（未生成なら魔法陣で代用）
+        GLuint markTex = (currentWave == 3) ? texHelpSpot
+                       : (currentWave == 2) ? (hasHelpGold  ? texHelpSpotGold  : texHelpSpot)
+                       :                       (hasHelpPlain ? texHelpSpotPlain : texHelpSpot);
         glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, texHelpSpot);
+        glBindTexture(GL_TEXTURE_2D, markTex);
         float br = onSpot ? 1.0f : (0.60f + 0.25f * pulse); // 明るさ（踏むと最大）
         glColor4d(br, br, br, 1.0);
         glBegin(GL_QUADS);
@@ -805,6 +1219,30 @@ void display()
         }
         glEnd();
         glPopMatrix();
+    }
+
+    // ボス近接衝撃波の炎（地面に広がる・加算合成で黒背景は消える）
+    if (bossShockTimer > 0) {
+        double t  = 1.0 - (double)bossShockTimer / 24.0;             // 0→1で広がる
+        double sz = 120.0 + 340.0 * t;
+        double al = (bossShockTimer > 6) ? 1.0 : (double)bossShockTimer / 6.0;
+        glEnable(GL_TEXTURE_2D);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);                           // 加算＝炎が光り黒は透ける
+        glBindTexture(GL_TEXTURE_2D, texBossShock);
+        glColor4d(1.0, 1.0, 1.0, al);
+        glPushMatrix();
+        glTranslated(bossShockX, bossShockY, 0.0);
+        glBegin(GL_QUADS);
+            glTexCoord2f(0.0, 0.0); glVertex2d(-sz,  sz);
+            glTexCoord2f(0.0, 1.0); glVertex2d(-sz, -sz);
+            glTexCoord2f(1.0, 1.0); glVertex2d( sz, -sz);
+            glTexCoord2f(1.0, 0.0); glVertex2d( sz,  sz);
+        glEnd();
+        glPopMatrix();
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);           // 元に戻す
+        glDisable(GL_TEXTURE_2D);
+        glColor4d(1.0, 1.0, 1.0, 1.0);
     }
     
 
@@ -1016,6 +1454,37 @@ for (int i = 0; i < MAX_BULLETS; i++) {
         glTranslated(footPos[0][0], footPos[0][1], 0.0);
         glRotated(playerAngle - 90.0, 0.0, 0.0, 1.0);
 
+        // 0. PC版の現在地マーカー（アバター画像が無いので、位置と向きを常時可視化。LiDAR/展示時は実体があるので出さない）
+        if (pcMode) {
+            glDisable(GL_TEXTURE_2D);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            double pulse = 0.5 + 0.5 * sin((double)gFrame * 0.15);
+            // 接地の影（明るい床でもリングが目立つ下地）
+            glColor4d(0.0, 0.0, 0.0, 0.25);
+            glBegin(GL_POLYGON);
+            for (int j = 0; j < 24; j++) { double a = 2.0*M_PI*j/24; glVertex2d(cos(a)*36.0, sin(a)*36.0); }
+            glEnd();
+            // 内側の淡いディスク
+            glColor4d(0.20, 0.95, 1.0, 0.16 + 0.10*pulse);
+            glBegin(GL_POLYGON);
+            for (int j = 0; j < 24; j++) { double a = 2.0*M_PI*j/24; glVertex2d(cos(a)*30.0, sin(a)*30.0); }
+            glEnd();
+            // 光るリング（現在地）
+            glColor4d(0.25, 1.0, 1.0, 0.55 + 0.35*pulse);
+            glLineWidth(3.0);
+            glBegin(GL_LINE_LOOP);
+            for (int j = 0; j < 32; j++) { double a = 2.0*M_PI*j/32; glVertex2d(cos(a)*34.0, sin(a)*34.0); }
+            glEnd();
+            glLineWidth(1.0);
+            // 向き矢印（ローカル+Y＝向いている方向）
+            glColor4d(1.0, 1.0, 0.4, 0.85);
+            glBegin(GL_TRIANGLES);
+            glVertex2d(0.0, 74.0); glVertex2d(-16.0, 46.0); glVertex2d(16.0, 46.0);
+            glEnd();
+            glColor4d(1.0, 1.0, 1.0, 1.0);
+        }
+
         // 1. 横振り
         if (sweepEffectTimer > 0) {
             glEnable(GL_TEXTURE_2D);
@@ -1159,8 +1628,8 @@ for (int i = 0; i < MAX_BULLETS; i++) {
         glColor4d(0.0, 0.0, 0.0, 0.6); // 薄い黒
         glBegin(GL_QUADS);
             glVertex2d(-550.0, 520.0);
-            glVertex2d(-550.0, 175.0);
-            glVertex2d(550.0, 175.0);
+            glVertex2d(-550.0, 110.0);
+            glVertex2d(550.0, 110.0);
             glVertex2d(550.0, 520.0);
         glEnd();
 
@@ -1197,6 +1666,19 @@ for (int i = 0; i < MAX_BULLETS; i++) {
             glTexCoord2f(1.0, 1.0); glVertex2d(dCx + dW, dCy - dH);
             glTexCoord2f(1.0, 0.0); glVertex2d(dCx + dW, dCy + dH);
         glEnd();
+
+        // スキップ案内（点滅・下段。スペースでクリア演出を飛ばせる）
+        if (hasSkipPrompt && (gFrame / 25) % 2 == 0) {
+            double hh = 21.0, hw = hh * arSkipPrompt;
+            glColor4d(1.0, 1.0, 1.0, 1.0);
+            glBindTexture(GL_TEXTURE_2D, texSkipPrompt);
+            glBegin(GL_QUADS);
+                glTexCoord2f(0.0, 0.0); glVertex2d(-hw, 148.0 + hh);
+                glTexCoord2f(0.0, 1.0); glVertex2d(-hw, 148.0 - hh);
+                glTexCoord2f(1.0, 1.0); glVertex2d( hw, 148.0 - hh);
+                glTexCoord2f(1.0, 0.0); glVertex2d( hw, 148.0 + hh);
+            glEnd();
+        }
         glDisable(GL_TEXTURE_2D);
 
         glDisable(GL_BLEND);
@@ -1783,6 +2265,7 @@ void updateEnemies() {
                 if (enemies[i].closeRangeTimer > 130) {
                     playerHP -= 25;
                     playerDamageTimer = 25;
+                    bossShockTimer = 24; bossShockX = enemies[i].x; bossShockY = enemies[i].y; // 衝撃波の炎を発生
                     alSourcePlay(soundData[SND_BOSS_EXP]);
                     enemies[i].closeRangeTimer = 0;
                     if (playerHP <= 0) {
@@ -2031,6 +2514,7 @@ void updateWaveManager() {
         if (waveClearTimer == 1) {
             if (currentWave == 1) {
                 currentWave = 2;
+                if (pcMode) { alertType = 1; alertTimer = (int)(2.5 * fr); alertActive = true; }  // 「攻撃封印」アラート
                 for(int i=0; i<MAX_ENEMIES; i++) enemies[i].active = false;
                 for(int i=0; i<MAX_BULLETS; i++) bullets[i].active = false;
                 for(int i=0; i<MAX_ITEMS; i++) items[i].active = false;
@@ -2038,6 +2522,7 @@ void updateWaveManager() {
             }
             else if (currentWave == 2) {
                 currentWave = 3;
+                if (pcMode) { alertType = 2; alertTimer = (int)(3.0 * fr); alertActive = true; }  // 「攻撃解放」＋ボス登場
                 enemiesKilledThisWave = 0;
                 // WAVE2の残り敵・弾を消す（消し忘れるとボスが出ず、残り敵撃破でリザルトに飛んでしまうバグの修正）
                 for(int i=0; i<MAX_ENEMIES; i++) enemies[i].active = false;
@@ -2049,7 +2534,11 @@ void updateWaveManager() {
         }
     }
     else {
-        if (currentWave == 1) {
+        // ヘルプ表示中／WAVE突入アラート中は 制限時間・敵補充・WAVE進行を止める（フリーズ）
+        if (bossHelpActive || alertActive) {
+            // 何もしない
+        }
+        else if (currentWave == 1) {
             if (gameTimer > 0) {
                 gameTimer--;
                 if (activeEnemyCount < 4) spawnEnemy(0);
@@ -2058,7 +2547,8 @@ void updateWaveManager() {
             }
         }
         else if (currentWave == 2) {
-            if (activeEnemyCount < 2 && enemiesKilledInWave2 < enemiesTargetWave2) {
+            // 「倒した数＋今いる数」が目標未満の時だけ補充（総数が目標を超えず、残数カウンタと画面の敵数が一致する）
+            if (activeEnemyCount < 2 && (enemiesKilledInWave2 + activeEnemyCount) < enemiesTargetWave2) {
                 spawnEnemy(0);
             }
             if (enemiesKilledInWave2 >= enemiesTargetWave2 && activeEnemyCount == 0) {
@@ -2177,14 +2667,29 @@ void timer(int value)
         // LiDAR/キーボードから足位置を取得
         updateLiDARInput();
 
+        // PC版: 右下スポットに乗ったら、そのWAVEの遊び方を全画面表示＆バトル一時停止。
+        //       スペースで閉じて再開。離れて踏み直すと再表示（展示版は壁に出すので対象外）。
+        //       クリア演出中・突入アラート中は発動しない。
+        if (pcMode && waveClearTimer <= 0 && !alertActive) {
+            bool onSpot = (footNum > 0 && footPos[0][0] > 320.0 && footPos[0][1] < 180.0);
+            if (!onSpot) bossHelpArmed = true;
+            if (onSpot && bossHelpArmed && !bossHelpActive) { bossHelpActive = true; bossHelpArmed = false; }
+        } else {
+            bossHelpActive = false;
+        }
+
         // 防御（立ち止まり）と向き（歩いた方向）の更新
         updatePlayerMotion();
 
         // WAVE管理（敵の補充・WAVE進行・クリア演出）
         updateWaveManager();
 
-        // クリア演出中（STAGE CLEAR!表示中）は敵・弾を止めて演出に集中させる
-        if (waveClearTimer <= 0) {
+        // WAVE突入アラートのカウントダウン（0になったら自動でバトル再開）
+        if (alertTimer > 0) alertTimer--;
+        if (bossShockTimer > 0) bossShockTimer--;
+
+        // クリア演出中／ヘルプ表示中／突入アラート中は 敵・弾を止める
+        if (waveClearTimer <= 0 && !bossHelpActive && !alertActive) {
             updateEnemies();    // 敵の行動（ボスAI・近接衝撃波・攻撃命中・撃破判定など）
             updateBullets();    // 弾の処理（移動・弾消し・反射・被弾）
             updateItemPickup(); // アイテム取得判定
@@ -2263,6 +2768,25 @@ glClearColor(0.0, 0.0, 0.0, 1.0); // 黒（引き締まって見える場合も�
 
     texNextStage = loadTexture("next_stage.png"); // 「NEXT STAGE」金色画像（床のクリア演出で表示）
     texHelpSpot  = loadTexture("help_spot.png");  // ボス戦ヘルプスポット（床の右下に表示）
+    texHelpSpotPlain = loadTexture("help_spot_plain.png"); hasHelpPlain = assetExists("help_spot_plain.png"); // WAVE1の石マーク
+    texHelpSpotGold  = loadTexture("help_spot_gold.png");  hasHelpGold  = assetExists("help_spot_gold.png");  // WAVE2の金コインマーク
+    texWave1Help = loadTexture(helpVariant("wave1_help.png", "wave1_help_expo.png"));  // WAVE1ヘルプ（PC=キー/展示=動作名）
+    texWave2Help = loadTexture(helpVariant("wave2_help.png", "wave2_help_expo.png"));  // WAVE2ヘルプ（同上）
+    texWave2Notice = loadTexture("wave2_notice.png"); hasWave2Notice = assetExists("wave2_notice.png"); // WAVE2案内(日本語)
+    texNokori = loadTexture("label_nokori.png"); hasNokori = assetExists("label_nokori.png");
+    texTai    = loadTexture("label_tai.png");    hasTai    = assetExists("label_tai.png");
+    arNotice = assetAspect("wave2_notice.png", 10.29);
+    arNokori = assetAspect("label_nokori.png", 2.57);
+    arTai    = assetAspect("label_tai.png",    1.33);
+    texAlertSealed   = loadTexture("attack_sealed.png");   hasAlertSealed   = assetExists("attack_sealed.png");   // 「攻撃封印！」バナー
+    texAlertUnsealed = loadTexture("attack_unsealed.png"); hasAlertUnsealed = assetExists("attack_unsealed.png"); // 「攻撃解放！」バナー
+    alertSealedAR    = assetAspect("attack_sealed.png",   3.0);
+    alertUnsealedAR  = assetAspect("attack_unsealed.png", 3.25);
+    texWarning = loadTexture("warning.png"); hasWarning = assetExists("warning.png"); arWarning = assetAspect("warning.png", 3.5);
+    texPressStart = loadTexture("press_start.png"); hasPressStart = assetExists("press_start.png"); arPressStart = assetAspect("press_start.png", 5.31);
+    texTitleFloor = loadTexture("title_floor.png"); hasTitleFloor = assetExists("title_floor.png");
+    texReturnBattle = loadTexture("return_battle.png"); hasReturnBattle = assetExists("return_battle.png"); arReturnBattle = assetAspect("return_battle.png", 7.61);
+    texSkipPrompt = loadTexture("skip_prompt.png"); hasSkipPrompt = assetExists("skip_prompt.png"); arSkipPrompt = assetAspect("skip_prompt.png", 5.61);
     // カウントダウン数字を床コンテキストでも使えるよう読み込む（壁のtexNumとは別コンテキスト）
     for (int i = 0; i < 10; i++) {
         char p[64];
@@ -2295,11 +2819,13 @@ glClearColor(0.0, 0.0, 0.0, 1.0); // 黒（引き締まって見える場合も�
     texBossExp = loadTexture("se_boss_exp.png");
     texBossExp2 = loadTexture("se_boss_exp2.png");
     texBossExp3 = loadTexture("se_boss_exp3.png");
+    texBossShock = loadTexture("se_boss_shock.png"); // ボス近接衝撃波の炎
 
     // ★注意: 壁用の画像(texWallBg)はここではなく、main関数で壁ウィンドウを作った後に読み込みます
 }
 void reshape(int w, int h)
 {
+    winW = w; winH = h;   // PC版の小窓配置で使う
     glViewport(0, 0, w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
@@ -2373,6 +2899,37 @@ void keyboard(unsigned char key, int x, int y)
             break;
 
         // --- デバッグ用コマンド ---
+        case ' ':  // スペース / Enter: 画面送り（PC版の決定キー）
+        case 13:   // ※プレイ中は何もしない（誤爆防止。強制スキップはデバッグ用のzのまま）
+            // ボス攻略ヘルプ表示中なら、閉じてバトル再開
+            if (pcMode && bossHelpActive) { bossHelpActive = false; bossHelpArmed = false; canAttack = true; sweepEffectTimer = 0; swingDownEffectTimer = 0; break; }  // 閉じた瞬間に攻撃状態をリセット（ヘルプ後に攻撃できない不具合の保険）
+            if (pcMode && alertActive) { alertActive = false; alertTimer = 0; break; }   // スペースでWAVE開始
+            if (pcMode && gameState == STATE_PLAY && waveClearTimer > 2) { waveClearTimer = 2; break; }  // ステージクリア演出をスペースでスキップ
+            if (gameState == STATE_PLAY) break;
+            // 画面切り替え時に攻撃が出ないようにフラグをリセット
+            swingDownEffectTimer = 0;
+            sweepEffectTimer = 0;
+            canAttack = true;
+            isDefending = false;
+            defenseEffectTimer = 0;
+            if (gameState == STATE_START) {
+                gameState = STATE_RULE;
+                rulePage = 0;
+                sceneTransitionTimer = 60;
+                alSourcePlay(soundData[SND_ATK_H]);
+            }
+            else if (gameState == STATE_RULE) {
+                resetGame();
+                gameState = STATE_PLAY;
+                alSourcePlay(soundData[SND_ATK_V]);
+            }
+            else if (gameState == STATE_RESULT && sceneTransitionTimer <= 0) {
+                gameState = STATE_START;
+                sceneTransitionTimer = 60;
+                alSourcePlay(soundData[SND_ATK_H]);
+            }
+            break;
+
         case 'r': // ジャイロリセット
             playerAngle = 90.0;
             printf("Angle Reset!\n");
