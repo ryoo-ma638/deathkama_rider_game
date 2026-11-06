@@ -1,7 +1,8 @@
-# Camagame_rider — 鎌ゲーム 再構築プロジェクト
+# デスカマー（Camagame_rider）
 
-> 旧プロジェクト `デジタルコンテンツ演習（授業版）` を全面的に再設計・整理した版。  
-> 旧コードからの移動は行わず、**複製・リファクタリング**として進めています。
+授業作品をもとに再構築した、C++製の2Dアクションゲームです。展示版ではLiDARで移動を読み取り、M5StickCを使った鎌型コントローラで攻撃します。macOS向けのPC版では、キーボードで全3ステージを遊べます。
+
+[作品紹介と動画](https://osaki-ryoma-portfolio.vercel.app/works/deathcamer/)
 
 ---
 
@@ -34,11 +35,11 @@
 
 ## 遊び方（PC・キーボードで試す）
 
-> ⚠️ ビルドは **macOS向け**（OpenGL / GLUT / OpenAL を使用）。
+> ビルドはmacOS向けです。C++コンパイラとFreeALUTが必要です。`run.sh` はHomebrewの `/opt/homebrew` を参照します。FreeALUTは `brew install freealut` で用意できます。
 
 ```bash
 ./run.sh        # PC版（1画面・キーボード操作）をビルドして起動
-./run.sh expo   # 展示用2画面（M5Stick・LiDAR使用）で起動
+./run.sh expo   # 展示用2画面で起動（センサー利用には展示機材と設定が必要）
 ```
 
 **操作**
@@ -233,7 +234,7 @@ FILE *fp = fopen("../LiDAR/footpoint.txt", "r");  // timer()内で毎フレー�
 
 ---
 
-## 進捗と残作業（2026-07-18 更新）
+## 開発当時の記録（2026年7月18日）
 
 ### ✅ 完了
 | 内容 | Bug ID |
@@ -271,3 +272,4 @@ FILE *fp = fopen("../LiDAR/footpoint.txt", "r");  // timer()内で毎フレー�
 | 🟢 低 | 将来拡張：振り速度でダメージ可変／コンボ／壁の敵を反射 | — |
 
 > 詳細は [`docs/project_notes.ts`](docs/project_notes.ts) 末尾の「実装進捗ログ」を参照。
+
